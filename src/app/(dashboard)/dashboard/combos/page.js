@@ -588,24 +588,37 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             <span className="material-symbols-outlined text-primary text-[18px]">layers</span>
           </div>
           <div className="min-w-0 flex-1">
-            <code className="block truncate font-mono text-sm font-medium">{combo.name}</code>
-            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
+            <code className="block truncate font-mono text-sm font-semibold text-text-main">{combo.name}</code>
+            <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
               {combo.models.length === 0 ? (
                 <span className="text-xs text-text-muted italic">No models</span>
               ) : (
-                combo.models.slice(0, 3).map((model, index) => (
-                  <code key={index} className="inline-flex items-center gap-1 rounded bg-black/5 px-1.5 py-0.5 font-mono text-xs text-text-muted dark:bg-white/5">
-                    <span>{model}</span>
-                    <CapacityBadges caps={
-                      comboByName[model]
-                        ? aggregateComboCapabilities(comboByName[model], comboByName)
-                        : getCaps?.(model)
-                    } />
-                  </code>
+                combo.models.slice(0, 4).map((model, index) => (
+                  <div key={index} className="inline-flex items-center gap-1">
+                    {index > 0 && (
+                      <span className="text-text-muted/60 text-[10px] select-none">→</span>
+                    )}
+                    <code className={cn(
+                      "inline-flex items-center gap-1 rounded-md px-2 py-0.5 font-mono text-xs border",
+                      index === 0
+                        ? "bg-primary/10 border-primary/20 text-primary font-medium"
+                        : "bg-black/5 dark:bg-white/5 border-black/5 dark:border-white/5 text-text-muted"
+                    )}>
+                      <span className="text-[10px] text-text-muted/70">{index + 1}.</span>
+                      <span>{model}</span>
+                      <CapacityBadges caps={
+                        comboByName[model]
+                          ? aggregateComboCapabilities(comboByName[model], comboByName)
+                          : getCaps?.(model)
+                      } />
+                    </code>
+                  </div>
                 ))
               )}
-              {combo.models.length > 3 && (
-                <span className="text-[10px] text-text-muted">+{combo.models.length - 3} more</span>
+              {combo.models.length > 4 && (
+                <span className="text-[10px] font-mono text-text-muted bg-black/5 dark:bg-white/5 px-1.5 py-0.5 rounded">
+                  +{combo.models.length - 4} more
+                </span>
               )}
             </div>
             {comboCaps && (

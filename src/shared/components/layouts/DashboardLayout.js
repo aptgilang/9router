@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import { useNotificationStore } from "@/store/notificationStore";
+import { cn } from "@/shared/utils/cn";
 import Sidebar from "../Sidebar";
 import Header from "../Header";
 
@@ -37,6 +39,20 @@ export default function DashboardLayout({ children }) {
   const notifications = useNotificationStore((state) => state.notifications);
   const removeNotification = useNotificationStore((state) => state.removeNotification);
 
+  const isTabActive = (href) => {
+    if (href === "/dashboard/endpoint") {
+      return pathname === "/dashboard" || pathname.startsWith("/dashboard/endpoint");
+    }
+    return pathname.startsWith(href);
+  };
+
+  const mobileNavItems = [
+    { href: "/dashboard/endpoint", label: "Endpoint", icon: "api" },
+    { href: "/dashboard/providers", label: "Providers", icon: "dns" },
+    { href: "/dashboard/combos", label: "Combos", icon: "layers" },
+    { href: "/dashboard/usage", label: "Usage", icon: "bar_chart" },
+  ];
+
   return (
     <div className="flex h-screen w-full overflow-hidden bg-bg">
       <div className="fixed top-4 right-4 z-[80] flex w-[min(92vw,380px)] flex-col gap-2">
@@ -68,10 +84,11 @@ export default function DashboardLayout({ children }) {
           );
         })}
       </div>
+
       {/* Mobile sidebar overlay */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/20 lg:hidden"
+          className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -95,9 +112,61 @@ export default function DashboardLayout({ children }) {
         {/* Faint grid background */}
         <div className="landing-grid absolute inset-0 pointer-events-none -z-10" aria-hidden="true" />
         <Header key={pathname} onMenuClick={() => setSidebarOpen(true)} />
-        <div className={`flex-1 overflow-y-auto custom-scrollbar ${pathname === "/dashboard/basic-chat" ? "" : "p-3.5 sm:p-5 md:p-6 lg:p-8"} ${pathname === "/dashboard/basic-chat" ? "flex flex-col overflow-hidden" : ""}`}>
-          <div className={`${pathname === "/dashboard/basic-chat" ? "flex-1 w-full h-full flex flex-col" : "max-w-7xl mx-auto"}`}>{children}</div>
+        <div
+          className={`flex-1 overflow-y-auto custom-scrollbar ${
+            pathname === "/dashboard/basic-chat"
+              ? "flex flex-col overflow-hidden"
+              : "p-3.5 sm:p-5 md:p-6 lg:p-8 pb-24 lg:pb-8"
+          }`}
+        >
+          <div className={`${pathname === "/dashboard/basic-chat" ? "flex-1 w-full h-full flex flex-col" : "max-w-7xl mx-auto"}`}>
+            {children}
+          </div>
         </div>
+
+        {/* Mobile Bottom Floating Navigation Bar */}
+        {pathname !== "/dashboard/basic-chat" && (
+          <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-surface/90 backdrop-blur-xl border-t border-border-subtle px-3 py-1.5 flex items-center justify-around shadow-lg">
+            {mobileNavItems.map((item) => {
+              const active = isTabActive(item.href);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    "flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer",
+                    active
+                      ? "text-primary font-semibold"
+                      : "text-text-muted hover:text-text-main"
+                  )}
+                >
+                  <span className={cn(
+                    "material-symbols-outlined text-[20px] transition-transform",
+                    active && "scale-110"
+                  )}>
+                    {item.icon}
+                  </span>
+                  <span className="text-[10px] mt-0.5 tracking-tight">{item.label}</span>
+                </Link>
+              );
+            })}
+
+            {/* Menu Drawer Toggle */}
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              className={cn(
+                "flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all cursor-pointer",
+                sidebarOpen ? "text-primary font-semibold" : "text-text-muted hover:text-text-main"
+              )}
+            >
+              <span className="material-symbols-outlined text-[20px]">
+                grid_view
+              </span>
+              <span className="text-[10px] mt-0.5 tracking-tight">More</span>
+            </button>
+          </nav>
+        )}
       </main>
     </div>
   );
