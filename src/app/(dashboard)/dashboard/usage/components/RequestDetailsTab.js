@@ -179,7 +179,7 @@ function JsonPrettyViewer({ data, title = "JSON", maxHeight = "max-h-[380px]" })
           {lines.length > 5 && (
             <input
               type="text"
-              placeholder="Search..."
+              placeholder="Search in JSON..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-6 w-28 sm:w-36 text-[11px] bg-black/40 border border-white/10 rounded px-2 text-white placeholder:text-zinc-500 focus:outline-none focus:border-primary"
@@ -189,7 +189,7 @@ function JsonPrettyViewer({ data, title = "JSON", maxHeight = "max-h-[380px]" })
             type="button"
             onClick={handleCopy}
             className="flex items-center gap-1 px-2.5 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-200 hover:text-white text-[11px] font-medium transition-colors cursor-pointer"
-            title="Copy JSON"
+            title="Copy text"
           >
             <span className="material-symbols-outlined text-[14px]">
               {copied ? "check" : "content_copy"}
@@ -229,14 +229,14 @@ function CollapsibleSection({ title, children, defaultOpen = false, icon = null,
         onClick={() => setIsOpen(!isOpen)}
         className="w-full flex items-center justify-between p-3.5 bg-black/[0.02] dark:bg-white/[0.02] hover:bg-black/[0.04] dark:hover:bg-white/[0.04] transition-colors cursor-pointer"
       >
-        <div className="flex items-center gap-2.5">
-          {icon && <span className="material-symbols-outlined text-[18px] text-primary">{icon}</span>}
-          <span className="font-semibold text-sm text-text-main">{title}</span>
+        <div className="flex items-center gap-2.5 min-w-0">
+          {icon && <span className="material-symbols-outlined text-[18px] text-primary shrink-0">{icon}</span>}
+          <span className="font-semibold text-sm text-text-main truncate">{title}</span>
           {badge}
         </div>
         <span
           className={cn(
-            "material-symbols-outlined text-[20px] text-text-muted transition-transform duration-200",
+            "material-symbols-outlined text-[20px] text-text-muted transition-transform duration-200 shrink-0 ml-2",
             isOpen ? "rotate-90" : ""
           )}
         >
@@ -253,37 +253,12 @@ function CollapsibleSection({ title, children, defaultOpen = false, icon = null,
   );
 }
 
-function getCachedTokens(tokens) {
-  return tokens?.cached_tokens || tokens?.cache_read_input_tokens || 0;
-}
-
-function getCacheCreationTokens(tokens) {
-  return tokens?.cache_creation_input_tokens || 0;
-}
-
-function getInputTokens(tokens) {
-  const prompt = tokens?.prompt_tokens || tokens?.input_tokens || 0;
-  const cache = getCachedTokens(tokens);
-  return prompt < cache ? cache : prompt;
-}
-
 export default function RequestDetailsTab() {
   const [details, setDetails] = useState([]);
-  const [pagination, setPagination] = useState({
-    page: 1,
-    pageSize: 20,
-    totalItems: 0,
-    totalPages: 0
-  });
   const [loading, setLoading] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [detailCache, setDetailCache] = useState({});
-  const [selectedDetail, setSelectedDetail] = useState(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [activeSectionFilter, setActiveSectionFilter] = useState("all");
-  const [copiedAll, setCopiedAll] = useState(false);
-
+  const [providers, setProviders] = useState([]);
+  const [providerNames, setProviderNames] = useState({});
   const [filters, setFilters] = useState({
     provider: "",
     model: "",
@@ -291,21 +266,34 @@ export default function RequestDetailsTab() {
     startDate: "",
     endDate: ""
   });
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: 20,
+    totalItems: 0,
+    totalPages: 0
+  });
 
-  const [providers, setProviders] = useState([]);
+  const [selectedDetail, setSelectedDetail] = useState(null);
+  const [detailCache, setDetailCache] = useState({});
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [copiedAll, setCopiedAll] = useState(false);
+  const [activeSectionFilter, setActiveSectionFilter] = useState("all");
+  const [responseViewTab, setResponseViewTab] = useState("formatted");
 
   useEffect(() => {
-    fetchProviderNames().then(() => {
-      fetch("/api/usage/providers")
-        .then((res) => res.json())
-        .then((data) => {
-          if (Array.isArray(data)) setProviders(data);
-        })
-        .catch((err) => console.error("Failed to fetch providers:", err));
+    fetchProviderNames().then(({ providerNameCache }) => {
+      setProviderNames(providerNameCache);
     });
+
+    fetch("/api/usage/request-details/providers")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.providers) setProviders(data.providers);
+      })
+      .catch((err) => console.error("Failed to load providers:", err));
   }, []);
 
-  // Fetch list with summary=true to avoid downloading heavy payloads
   const fetchDetails = useCallback(async () => {
     setLoading(true);
     try {
@@ -371,7 +359,7 @@ export default function RequestDetailsTab() {
     setPagination((prev) => ({ ...prev, page: 1 }));
   };
 
-  const handleClearFilters = () => {
+  const handleResetFilters = () => {
     setFilters({
       provider: "",
       model: "",
@@ -390,10 +378,11 @@ export default function RequestDetailsTab() {
     setPagination((prev) => ({ ...prev, pageSize: newPageSize, page: 1 }));
   };
 
-  // Inspect: lazy load full record by ID if not in cache
+  // Detail: lazy load full record by ID if not in cache
   const handleViewDetail = async (summaryItem) => {
     setIsModalOpen(true);
     setActiveSectionFilter("all");
+    setResponseViewTab("formatted");
 
     if (detailCache[summaryItem.id]) {
       setSelectedDetail(detailCache[summaryItem.id]);
@@ -422,6 +411,30 @@ export default function RequestDetailsTab() {
     navigator.clipboard.writeText(JSON.stringify(selectedDetail, null, 2));
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 2000);
+  };
+
+  const handleDownloadJson = () => {
+    if (!selectedDetail) return;
+    const jsonStr = JSON.stringify(selectedDetail, null, 2);
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `request-detail-${selectedDetail.id || "export"}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const getInputTokens = (tokens) => {
+    if (!tokens) return 0;
+    return tokens.prompt_tokens || tokens.input_tokens || 0;
+  };
+
+  const getCachedTokens = (tokens) => {
+    if (!tokens) return 0;
+    return tokens.cached_tokens || tokens.cache_read_input_tokens || tokens.prompt_tokens_details?.cached_tokens || 0;
   };
 
   return (
@@ -459,6 +472,17 @@ export default function RequestDetailsTab() {
           </div>
 
           <div>
+            <label className="block text-xs font-medium text-text-muted mb-1">Model Search</label>
+            <input
+              type="text"
+              value={filters.model}
+              onChange={(e) => handleFilterChange("model", e.target.value)}
+              placeholder="e.g. gemini, claude"
+              className="w-full h-9 rounded-lg border border-black/10 dark:border-white/10 bg-surface px-3 text-xs sm:text-sm text-text-main placeholder:text-text-muted/60 focus:outline-none focus:border-primary"
+            />
+          </div>
+
+          <div>
             <label className="block text-xs font-medium text-text-muted mb-1">Start Date</label>
             <input
               type="date"
@@ -477,26 +501,24 @@ export default function RequestDetailsTab() {
               className="w-full h-9 rounded-lg border border-black/10 dark:border-white/10 bg-surface px-3 text-xs sm:text-sm text-text-main focus:outline-none focus:border-primary"
             />
           </div>
+        </div>
 
-          <div className="flex items-end">
-            <Button
-              variant="outline"
-              onClick={handleClearFilters}
-              disabled={!filters.provider && !filters.status && !filters.startDate && !filters.endDate}
-              className="w-full h-9 text-xs sm:text-sm cursor-pointer"
-            >
-              Clear Filters
-            </Button>
-          </div>
+        <div className="mt-4 flex items-center justify-between border-t border-black/5 dark:border-white/5 pt-3">
+          <span className="text-xs text-text-muted">
+            Total Records: <strong className="text-text-main font-mono">{pagination.totalItems.toLocaleString()}</strong>
+          </span>
+          <Button variant="ghost" size="sm" onClick={handleResetFilters} className="text-xs h-8">
+            Reset Filters
+          </Button>
         </div>
       </Card>
 
-      {/* Table Card */}
-      <Card padding="none">
+      {/* Main Table Card */}
+      <Card className="overflow-hidden p-0">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] sm:min-w-[880px]">
+          <table className="w-full border-collapse">
             <thead>
-              <tr className="border-b border-black/5 dark:border-white/5 bg-black/[0.01] dark:bg-white/[0.01]">
+              <tr className="border-b border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02]">
                 <th className="text-left p-3 sm:p-4 text-xs font-semibold text-text-main uppercase tracking-wider">Timestamp</th>
                 <th className="text-left p-3 sm:p-4 text-xs font-semibold text-text-main uppercase tracking-wider">Model</th>
                 <th className="text-left p-3 sm:p-4 text-xs font-semibold text-text-main uppercase tracking-wider">Provider</th>
@@ -577,9 +599,10 @@ export default function RequestDetailsTab() {
                         size="sm"
                         onClick={() => handleViewDetail(detail)}
                         className="cursor-pointer text-xs h-7 px-3 gap-1 hover:border-primary"
+                        title="View complete transaction detail"
                       >
                         <span className="material-symbols-outlined text-[14px]">visibility</span>
-                        <span>Inspect</span>
+                        <span>Detail</span>
                       </Button>
                     </td>
                   </tr>
@@ -602,7 +625,7 @@ export default function RequestDetailsTab() {
         )}
       </Card>
 
-      {/* FULLSCREEN RESPONSIVE MODAL DIALOG (Replaces Drawer) */}
+      {/* FULLSCREEN RESPONSIVE MODAL DIALOG */}
       {isModalOpen && selectedDetail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-3 md:p-5 bg-black/70 backdrop-blur-md transition-all">
           <div
@@ -626,7 +649,7 @@ export default function RequestDetailsTab() {
                   <span className="material-symbols-outlined text-[18px]">terminal</span>
                 </div>
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h2 className="text-sm sm:text-base font-bold text-text-main truncate">
                       {selectedDetail.model}
                     </h2>
@@ -649,6 +672,9 @@ export default function RequestDetailsTab() {
                   </div>
                   <p className="text-[11px] text-text-muted truncate font-mono">
                     ID: {selectedDetail.id} • {new Date(selectedDetail.timestamp).toLocaleString()}
+                    {selectedDetail.connectionId && (
+                      <span className="ml-2 text-text-muted/80">• Account: {selectedDetail.connectionId.slice(0, 16)}</span>
+                    )}
                   </p>
                 </div>
               </div>
@@ -658,13 +684,25 @@ export default function RequestDetailsTab() {
                 <Button
                   variant="outline"
                   size="sm"
+                  onClick={handleDownloadJson}
+                  className="h-8 text-xs gap-1.5 cursor-pointer hidden sm:flex"
+                  title="Download complete transaction as JSON"
+                >
+                  <span className="material-symbols-outlined text-[15px]">download</span>
+                  <span>Download JSON</span>
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={handleCopyAll}
                   className="h-8 text-xs gap-1.5 cursor-pointer hidden sm:flex"
+                  title="Copy full payload object to clipboard"
                 >
                   <span className="material-symbols-outlined text-[15px]">
                     {copiedAll ? "check" : "content_copy"}
                   </span>
-                  <span>{copiedAll ? "Copied Full" : "Copy Payload"}</span>
+                  <span>{copiedAll ? "Copied" : "Copy Payload"}</span>
                 </Button>
 
                 <Button
@@ -734,6 +772,11 @@ export default function RequestDetailsTab() {
                   <div className="text-xs sm:text-sm font-semibold text-text-main truncate">
                     {getProviderName(selectedDetail.provider, providerNameCache)}
                   </div>
+                  {selectedDetail.metadata?.targetFormat && (
+                    <span className="text-[10px] text-text-muted block mt-0.5 font-mono truncate">
+                      Format: {selectedDetail.metadata.targetFormat}
+                    </span>
+                  )}
                 </div>
 
                 <div className="p-3 rounded-xl border border-border-subtle bg-surface shadow-xs">
@@ -765,6 +808,11 @@ export default function RequestDetailsTab() {
                       ? "SSE Streaming"
                       : "Standard JSON"}
                   </div>
+                  {selectedDetail.response?.choices?.[0]?.finish_reason && (
+                    <span className="text-[10px] text-text-muted block mt-0.5 font-mono">
+                      Finish: {selectedDetail.response.choices[0].finish_reason}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -814,7 +862,28 @@ export default function RequestDetailsTab() {
               <div className="space-y-4">
                 {/* Section 1: Client Request */}
                 {(activeSectionFilter === "all" || activeSectionFilter === "1-request") && (
-                  <CollapsibleSection title="1. Client Request (Input)" defaultOpen={true} icon="input">
+                  <CollapsibleSection
+                    title="1. Client Request (Input)"
+                    defaultOpen={true}
+                    icon="input"
+                    badge={
+                      <div className="flex items-center gap-1.5 text-[10px] font-mono">
+                        <span className="px-2 py-0.5 rounded bg-primary/10 text-primary font-semibold">
+                          {selectedDetail.metadata?.endpoint || selectedDetail.endpoint || (selectedDetail.request?.stream ? "POST /v1/chat/completions (stream)" : "POST /v1/chat/completions")}
+                        </span>
+                        {selectedDetail.request?.messages?.length > 0 && (
+                          <span className="px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/5 text-text-muted">
+                            {selectedDetail.request.messages.length} msgs
+                          </span>
+                        )}
+                        {selectedDetail.request?.tools?.length > 0 && (
+                          <span className="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400">
+                            {selectedDetail.request.tools.length} tools
+                          </span>
+                        )}
+                      </div>
+                    }
+                  >
                     <JsonPrettyViewer data={selectedDetail.request} title="client_request.json" />
                   </CollapsibleSection>
                 )}
@@ -822,106 +891,211 @@ export default function RequestDetailsTab() {
                 {/* Section 2: Provider Request */}
                 {selectedDetail.providerRequest &&
                   (activeSectionFilter === "all" || activeSectionFilter === "2-providerRequest") && (
-                    <CollapsibleSection title="2. Provider Request (Translated)" defaultOpen={true} icon="translate">
-                      <JsonPrettyViewer data={selectedDetail.providerRequest} title="provider_request.json" />
+                    <CollapsibleSection
+                      title="2. Provider Request (Translated Upstream)"
+                      defaultOpen={true}
+                      icon="translate"
+                      badge={
+                        selectedDetail.metadata?.targetFormat ? (
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold">
+                            Format: {selectedDetail.metadata.targetFormat}
+                          </span>
+                        ) : null
+                      }
+                    >
+                      <div className="space-y-3">
+                        {selectedDetail.providerRequest.url && (
+                          <div className="p-2.5 rounded-lg bg-black/5 dark:bg-white/5 border border-border-subtle flex items-center justify-between gap-2 text-xs font-mono">
+                            <div className="flex items-center gap-1.5 min-w-0 truncate text-text-muted">
+                              <span className="font-semibold text-text-main">Target URL:</span>
+                              <span className="truncate text-primary">{selectedDetail.providerRequest.url}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(selectedDetail.providerRequest.url);
+                                alert("URL copied!");
+                              }}
+                              className="text-text-muted hover:text-text-main shrink-0 p-1 cursor-pointer"
+                              title="Copy Target URL"
+                            >
+                              <span className="material-symbols-outlined text-[15px]">content_copy</span>
+                            </button>
+                          </div>
+                        )}
+
+                        {selectedDetail.providerRequest.headers && Object.keys(selectedDetail.providerRequest.headers).length > 0 && (
+                          <CollapsibleSection title="Upstream Request Headers" defaultOpen={false} icon="list_alt">
+                            <JsonPrettyViewer data={selectedDetail.providerRequest.headers} title="headers.json" maxHeight="max-h-[200px]" />
+                          </CollapsibleSection>
+                        )}
+
+                        <JsonPrettyViewer
+                          data={selectedDetail.providerRequest.body || selectedDetail.providerRequest}
+                          title="provider_request.json"
+                        />
+                      </div>
                     </CollapsibleSection>
                   )}
 
                 {/* Section 3: Provider Response */}
                 {selectedDetail.providerResponse &&
                   (activeSectionFilter === "all" || activeSectionFilter === "3-providerResponse") && (
-                    <CollapsibleSection title="3. Provider Response (Raw Upstream)" defaultOpen={true} icon="data_object">
-                      <JsonPrettyViewer data={selectedDetail.providerResponse} title="provider_response.json" />
+                    <CollapsibleSection
+                      title="3. Provider Response (Raw Upstream)"
+                      defaultOpen={true}
+                      icon="data_object"
+                      badge={
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 font-semibold">
+                          {typeof selectedDetail.providerResponse === "string" ? "Raw Stream / Text" : "Raw JSON Object"}
+                        </span>
+                      }
+                    >
+                      <JsonPrettyViewer data={selectedDetail.providerResponse} title="provider_response.raw" />
                     </CollapsibleSection>
                   )}
 
                 {/* Section 4: Final Output */}
                 {(activeSectionFilter === "all" || activeSectionFilter === "4-response") && (
-                  <CollapsibleSection title="4. Client Response (Final Output)" defaultOpen={true} icon="output">
-                    <div className="space-y-4">
-                      {/* Thinking / Reasoning Process */}
-                      {selectedDetail.response?.thinking && (
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between text-xs font-semibold text-text-main">
-                            <span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
-                              <span className="material-symbols-outlined text-[16px]">psychology</span>
-                              Thinking / Reasoning Process
-                            </span>
-                            <span className="text-[10px] font-mono text-text-muted px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
-                              {selectedDetail.response.thinking.length.toLocaleString()} characters
-                            </span>
-                          </div>
-                          <pre className="max-h-[260px] max-w-full overflow-auto rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5 font-mono text-xs text-amber-950 dark:text-amber-100 whitespace-pre-wrap leading-relaxed shadow-xs">
-                            {selectedDetail.response.thinking}
-                          </pre>
-                        </div>
-                      )}
-
-                      {/* Tool Calls Execution */}
-                      {selectedDetail.response?.tool_calls && selectedDetail.response.tool_calls.length > 0 && (
-                        <div className="space-y-2.5">
-                          <div className="flex items-center justify-between text-xs font-semibold text-text-main">
-                            <span className="flex items-center gap-1.5 text-sky-600 dark:text-sky-400">
-                              <span className="material-symbols-outlined text-[16px]">build</span>
-                              Tool Calls Executed ({selectedDetail.response.tool_calls.length})
-                            </span>
-                          </div>
-                          <div className="space-y-2.5">
-                            {selectedDetail.response.tool_calls.map((tc, idx) => (
-                              <div
-                                key={idx}
-                                className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-3 sm:p-4 space-y-2 shadow-xs"
-                              >
-                                <div className="flex items-center justify-between text-xs">
-                                  <span className="font-mono font-bold text-sky-700 dark:text-sky-300 flex items-center gap-1.5">
-                                    <span className="material-symbols-outlined text-[16px]">terminal</span>
-                                    {tc.function?.name || tc.name || `Tool #${idx + 1}`}
-                                  </span>
-                                  {tc.id && (
-                                    <span className="text-[10px] font-mono text-text-muted px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
-                                      {tc.id}
-                                    </span>
-                                  )}
-                                </div>
-                                <JsonPrettyViewer
-                                  data={tc.function?.arguments || tc.arguments || {}}
-                                  title={`arguments_${idx + 1}.json`}
-                                  maxHeight="max-h-[220px]"
-                                />
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Message Content */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-xs font-semibold text-text-main">
-                          <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
-                            <span className="material-symbols-outlined text-[16px]">chat_bubble</span>
-                            Message Text Body
-                          </span>
-                          {selectedDetail.response?.content && (
-                            <span className="text-[10px] font-mono text-text-muted px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
-                              {selectedDetail.response.content.length.toLocaleString()} chars
-                            </span>
+                  <CollapsibleSection
+                    title="4. Client Response (Final Output)"
+                    defaultOpen={true}
+                    icon="output"
+                    badge={
+                      <div className="flex items-center rounded-lg bg-black/5 dark:bg-white/5 p-0.5 border border-border-subtle text-[11px]">
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setResponseViewTab("formatted"); }}
+                          className={cn(
+                            "px-2 py-0.5 rounded transition-colors font-medium cursor-pointer",
+                            responseViewTab === "formatted"
+                              ? "bg-primary text-primary-foreground font-semibold shadow-xs"
+                              : "text-text-muted hover:text-text-main"
                           )}
-                        </div>
-
-                        {selectedDetail.response?.content &&
-                        selectedDetail.response.content !== "[Empty streaming response]" ? (
-                          <pre className="max-h-[350px] max-w-full overflow-auto rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3.5 font-sans text-xs text-text-main whitespace-pre-wrap leading-relaxed shadow-xs">
-                            {selectedDetail.response.content}
-                          </pre>
-                        ) : (
-                          <div className="p-4 rounded-xl border border-dashed border-border-subtle text-center text-xs text-text-muted">
-                            {selectedDetail.response?.tool_calls?.length
-                              ? "Tool call execution (no direct text message body)"
-                              : "[No text content returned]"}
+                        >
+                          Visual View
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setResponseViewTab("raw"); }}
+                          className={cn(
+                            "px-2 py-0.5 rounded transition-colors font-medium cursor-pointer",
+                            responseViewTab === "raw"
+                              ? "bg-primary text-primary-foreground font-semibold shadow-xs"
+                              : "text-text-muted hover:text-text-main"
+                          )}
+                        >
+                          Full JSON
+                        </button>
+                      </div>
+                    }
+                  >
+                    {responseViewTab === "raw" ? (
+                      <JsonPrettyViewer data={selectedDetail.response} title="client_response.json" />
+                    ) : (
+                      <div className="space-y-4">
+                        {/* Error Banner if response has error */}
+                        {(selectedDetail.response?.error || selectedDetail.status === "error") && (
+                          <div className="p-4 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300 space-y-1.5">
+                            <div className="flex items-center gap-2 font-bold text-xs">
+                              <span className="material-symbols-outlined text-[18px]">error</span>
+                              <span>Error Status: {selectedDetail.response?.status || selectedDetail.status || "Failed"}</span>
+                            </div>
+                            <pre className="font-mono text-xs whitespace-pre-wrap break-words">
+                              {typeof selectedDetail.response?.error === "object"
+                                ? JSON.stringify(selectedDetail.response.error, null, 2)
+                                : String(selectedDetail.response?.error || selectedDetail.response?.message || "Unknown error occurred")}
+                            </pre>
                           </div>
                         )}
+
+                        {/* Thinking / Reasoning Process */}
+                        {(selectedDetail.response?.thinking || selectedDetail.response?.choices?.[0]?.message?.reasoning_content) && (
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between text-xs font-semibold text-text-main">
+                              <span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+                                <span className="material-symbols-outlined text-[16px]">psychology</span>
+                                Thinking / Reasoning Process
+                              </span>
+                              <span className="text-[10px] font-mono text-text-muted px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
+                                {(selectedDetail.response.thinking || selectedDetail.response.choices?.[0]?.message?.reasoning_content || "").length.toLocaleString()} characters
+                              </span>
+                            </div>
+                            <pre className="max-h-[300px] max-w-full overflow-auto rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5 font-mono text-xs text-amber-950 dark:text-amber-100 whitespace-pre-wrap leading-relaxed shadow-xs">
+                              {selectedDetail.response.thinking || selectedDetail.response.choices?.[0]?.message?.reasoning_content}
+                            </pre>
+                          </div>
+                        )}
+
+                        {/* Tool Calls Execution */}
+                        {((selectedDetail.response?.tool_calls && selectedDetail.response.tool_calls.length > 0) ||
+                          (selectedDetail.response?.choices?.[0]?.message?.tool_calls && selectedDetail.response.choices[0].message.tool_calls.length > 0)) && (
+                          <div className="space-y-2.5">
+                            <div className="flex items-center justify-between text-xs font-semibold text-text-main">
+                              <span className="flex items-center gap-1.5 text-sky-600 dark:text-sky-400">
+                                <span className="material-symbols-outlined text-[16px]">build</span>
+                                Tool Calls Executed (
+                                {(selectedDetail.response?.tool_calls || selectedDetail.response?.choices?.[0]?.message?.tool_calls).length}
+                                )
+                              </span>
+                            </div>
+                            <div className="space-y-2.5">
+                              {(selectedDetail.response?.tool_calls || selectedDetail.response?.choices?.[0]?.message?.tool_calls).map((tc, idx) => (
+                                <div
+                                  key={idx}
+                                  className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-3 sm:p-4 space-y-2 shadow-xs"
+                                >
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="font-mono font-bold text-sky-700 dark:text-sky-300 flex items-center gap-1.5">
+                                      <span className="material-symbols-outlined text-[16px]">terminal</span>
+                                      {tc.function?.name || tc.name || `Tool #${idx + 1}`}
+                                    </span>
+                                    {tc.id && (
+                                      <span className="text-[10px] font-mono text-text-muted px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
+                                        {tc.id}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <JsonPrettyViewer
+                                    data={tc.function?.arguments || tc.arguments || {}}
+                                    title={`arguments_${idx + 1}.json`}
+                                    maxHeight="max-h-[220px]"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Message Content */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-xs font-semibold text-text-main">
+                            <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+                              <span className="material-symbols-outlined text-[16px]">chat_bubble</span>
+                              Message Text Body
+                            </span>
+                            {(selectedDetail.response?.content || selectedDetail.response?.choices?.[0]?.message?.content) && (
+                              <span className="text-[10px] font-mono text-text-muted px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
+                                {(selectedDetail.response.content || selectedDetail.response.choices?.[0]?.message?.content || "").length.toLocaleString()} chars
+                              </span>
+                            )}
+                          </div>
+
+                          {(selectedDetail.response?.content || selectedDetail.response?.choices?.[0]?.message?.content) &&
+                          (selectedDetail.response?.content !== "[Empty streaming response]" && selectedDetail.response?.choices?.[0]?.message?.content !== "[Empty streaming response]") ? (
+                            <pre className="max-h-[400px] max-w-full overflow-auto rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3.5 font-sans text-xs text-text-main whitespace-pre-wrap leading-relaxed shadow-xs">
+                              {selectedDetail.response?.content || selectedDetail.response?.choices?.[0]?.message?.content}
+                            </pre>
+                          ) : (
+                            <div className="p-4 rounded-xl border border-dashed border-border-subtle text-center text-xs text-text-muted">
+                              {selectedDetail.response?.tool_calls?.length || selectedDetail.response?.choices?.[0]?.message?.tool_calls?.length
+                                ? "Tool call execution (no direct text message body)"
+                                : "[No text content returned]"}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </CollapsibleSection>
                 )}
               </div>
@@ -932,13 +1106,22 @@ export default function RequestDetailsTab() {
               <Button
                 variant="outline"
                 size="sm"
+                onClick={handleDownloadJson}
+                className="flex-1 text-xs gap-1 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[14px]">download</span>
+                <span>Download</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={handleCopyAll}
                 className="flex-1 text-xs gap-1 cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[14px]">
                   {copiedAll ? "check" : "content_copy"}
                 </span>
-                <span>{copiedAll ? "Copied" : "Copy Payload"}</span>
+                <span>{copiedAll ? "Copied" : "Copy"}</span>
               </Button>
               <Button
                 variant="primary"

@@ -78,11 +78,12 @@ function generateDetailId(model) {
 }
 
 function truncateField(obj, maxSize) {
-  const str = JSON.stringify(obj || {});
+  if (obj === null || obj === undefined) return obj;
+  const str = typeof obj === "string" ? obj : JSON.stringify(obj);
   if (str.length > maxSize) {
-    return { _truncated: true, _originalSize: str.length, _preview: str.substring(0, 200) };
+    return { _truncated: true, _originalSize: str.length, _preview: str.substring(0, 500) };
   }
-  return obj || {};
+  return obj;
 }
 
 async function flushToDatabase() {
@@ -116,6 +117,7 @@ async function flushToDatabase() {
             providerResponse: truncateField(item.providerResponse, config.maxJsonSize),
             response: truncateField(item.response, config.maxJsonSize),
             pxpipe: item.pxpipe || undefined,
+            metadata: item.metadata || undefined,
           };
 
           db.run(

@@ -6,7 +6,7 @@ import { PROVIDERS } from "../../config/providers.js";
 import { HTTP_STATUS, STREAM_STALL_TIMEOUT_MS } from "../../config/runtimeConfig.js";
 import { buildAbortedResponsesTerminalBytes } from "../../utils/responsesStreamHelpers.js";
 import { buildStreamErrorBytes } from "../../utils/streamHelpers.js";
-import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
+import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine, sanitizeHeaders } from "./requestDetail.js";
 import { saveRequestDetail } from "@/lib/usageDb.js";
 import { SSE_HEADERS_CORS as SSE_HEADERS } from "../../utils/sseConstants.js";
 
@@ -44,7 +44,7 @@ function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent,
 /**
  * Handle streaming response — pipe provider SSE through transform stream to client.
  */
-export async function handleStreamingResponse({ providerResponse, provider, model, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, pxpipe, reqTag, log, credentials }) {
+export async function handleStreamingResponse({ providerResponse, provider, model, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, pxpipe, reqTag, log, credentials, providerUrl, providerHeaders }) {
   if (onRequestSuccess) {
     Promise.resolve()
       .then(onRequestSuccess)
@@ -93,16 +93,29 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
   const stallTimeoutMs = PROVIDERS[provider]?.stallTimeoutMs || STREAM_STALL_TIMEOUT_MS;
   const transformedBody = pipeWithDisconnect(providerResponse, transformStream, streamController, onAbortTerminal, stallTimeoutMs);
 
+  const sanitizedProviderHeaders = providerHeaders ? sanitizeHeaders(providerHeaders) : undefined;
+  const initialProviderReq = (providerUrl || sanitizedProviderHeaders)
+    ? {
+        url: providerUrl || undefined,
+        headers: sanitizedProviderHeaders,
+        body: finalBody || translatedBody || null
+      }
+    : (finalBody || translatedBody || null);
+
   saveRequestDetail(buildRequestDetail({
     provider, model, connectionId,
     latency: { ttft: 0, total: Date.now() - requestStartTime },
     tokens: { prompt_tokens: 0, completion_tokens: 0 },
     request: extractRequestConfig(body, stream),
-    providerRequest: finalBody || translatedBody || null,
-    providerResponse: "[Streaming - raw response not captured]",
+    providerRequest: initialProviderReq,
+    providerResponse: "[Streaming in progress...]",
     response: { content: "[Streaming in progress...]", thinking: null, type: "streaming" },
     pxpipe,
-    status: "success"
+    status: "success",
+    sourceFormat,
+    targetFormat,
+    providerUrl,
+    endpoint: clientRawRequest?.endpoint
   }, { id: streamDetailId })).catch(err => {
     console.error("[RequestDetail] Failed to save streaming request:", err.message);
   });
@@ -116,7 +129,7 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
 /**
  * Build onStreamComplete callback for streaming usage tracking.
  */
-export function buildOnStreamComplete({ provider, model, connectionId, apiKey, requestStartTime, body, stream, finalBody, translatedBody, clientRawRequest, pxpipe, reqTag, log }) {
+export function buildOnStreamComplete({ provider, model, connectionId, apiKey, requestStartTime, body, stream, finalBody, translatedBody, clientRawRequest, pxpipe, reqTag, log, providerUrl, providerHeaders, sourceFormat, targetFormat }) {
   const streamDetailId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
   const onStreamComplete = (contentObj, usage, ttftAt) => {
@@ -134,22 +147,55 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, r
       safeContent = "[Empty streaming response]";
     }
     const safeThinking = contentObj?.thinking || null;
+    const rawChunks = contentObj?.rawProviderResponse || "";
+
+    const fullResponse = {
+      id: `chatcmpl-${streamDetailId}`,
+      object: "chat.completion",
+      created: Math.floor(requestStartTime / 1000),
+      model,
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: safeContent !== "[Empty streaming response]" ? safeContent : null,
+            ...(safeThinking ? { reasoning_content: safeThinking } : {}),
+            ...(toolCalls ? { tool_calls: toolCalls } : {})
+          },
+          finish_reason: toolCalls ? "tool_calls" : "stop"
+        }
+      ],
+      usage: usage || undefined,
+      thinking: safeThinking,
+      tool_calls: toolCalls,
+      content: safeContent,
+      type: "streaming"
+    };
+
+    const sanitizedProviderHeaders = providerHeaders ? sanitizeHeaders(providerHeaders) : undefined;
+    const providerReqPayload = (providerUrl || sanitizedProviderHeaders)
+      ? {
+          url: providerUrl || undefined,
+          headers: sanitizedProviderHeaders,
+          body: finalBody || translatedBody || null
+        }
+      : (finalBody || translatedBody || null);
 
     saveRequestDetail(buildRequestDetail({
       provider, model, connectionId,
       latency,
       tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
       request: extractRequestConfig(body, stream),
-      providerRequest: finalBody || translatedBody || null,
-      providerResponse: safeContent || (toolCalls ? JSON.stringify(toolCalls, null, 2) : ""),
-      response: {
-        content: safeContent,
-        thinking: safeThinking,
-        tool_calls: toolCalls,
-        type: "streaming"
-      },
+      providerRequest: providerReqPayload,
+      providerResponse: rawChunks || safeContent || (toolCalls ? JSON.stringify(toolCalls, null, 2) : ""),
+      response: fullResponse,
       pxpipe,
-      status: "success"
+      status: "success",
+      sourceFormat,
+      targetFormat,
+      providerUrl,
+      endpoint: clientRawRequest?.endpoint
     }, { id: streamDetailId })).catch(err => {
       console.error("[RequestDetail] Failed to update streaming content:", err.message);
     });
