@@ -1,13 +1,26 @@
 import { NextResponse } from "next/server";
-import { getRequestDetails } from "@/lib/usageDb";
+import { getRequestDetails, getRequestDetailById } from "@/lib/usageDb";
 
 /**
  * GET /api/usage/request-details
- * Query parameters: page, pageSize (1-100), provider, model, connectionId, status, startDate, endDate
+ * Query parameters: id, page, pageSize (1-100), provider, model, connectionId, status, startDate, endDate, summary
  */
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
+
+    // Support single record query by ID for fast lazy-loading
+    const id = searchParams.get("id");
+    if (id) {
+      const detail = await getRequestDetailById(id);
+      if (!detail) {
+        return NextResponse.json(
+          { error: "Request detail not found" },
+          { status: 404 }
+        );
+      }
+      return NextResponse.json({ detail });
+    }
     
     const pageRaw = parseInt(searchParams.get("page"));
     const page = Number.isNaN(pageRaw) ? 1 : pageRaw;
@@ -19,6 +32,7 @@ export async function GET(request) {
     const status = searchParams.get("status");
     const startDate = searchParams.get("startDate");
     const endDate = searchParams.get("endDate");
+    const summary = searchParams.get("summary") === "true";
     
     if (page < 1) {
       return NextResponse.json(
@@ -36,7 +50,8 @@ export async function GET(request) {
     
     const filter = {
       page,
-      pageSize
+      pageSize,
+      summary
     };
     
     if (provider) filter.provider = provider;

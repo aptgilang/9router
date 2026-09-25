@@ -184,7 +184,25 @@ export async function getRequestDetails(filter = {}) {
     `SELECT data FROM requestDetails ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
     [...params, pageSize, offset]
   );
-  const details = rows.map((r) => parseJson(r.data, {}));
+  const details = rows.map((r) => {
+    const full = parseJson(r.data, {});
+    if (filter.summary) {
+      return {
+        id: full.id,
+        timestamp: full.timestamp,
+        provider: full.provider,
+        model: full.model,
+        connectionId: full.connectionId,
+        status: full.status,
+        latency: full.latency,
+        tokens: full.tokens,
+        hasThinking: Boolean(full.response?.thinking),
+        hasTools: Boolean(full.response?.tool_calls && full.response.tool_calls.length > 0),
+        pxpipe: full.pxpipe ? { applied: full.pxpipe.applied } : undefined
+      };
+    }
+    return full;
+  });
 
   return {
     details,
