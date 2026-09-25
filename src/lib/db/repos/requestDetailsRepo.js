@@ -1,7 +1,7 @@
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 
-const DEFAULT_MAX_RECORDS = 1000;
+const DEFAULT_MAX_RECORDS = 200;
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_FLUSH_INTERVAL_MS = 5000;
 const DEFAULT_MAX_JSON_SIZE = 2 * 1024 * 1024; // 2MB
@@ -174,8 +174,17 @@ export async function getRequestDetails(filter = {}) {
   if (filter.endDate) { conds.push("timestamp <= ?"); params.push(new Date(filter.endDate).toISOString()); }
 
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  const config = await getObservabilityConfig();
   const cntRow = db.get(`SELECT COUNT(*) as c FROM requestDetails ${where}`, params);
-  const totalItems = cntRow ? cntRow.c : 0;
+  let totalItems = cntRow ? cntRow.c : 0;
+
+  if (!where && totalItems > config.maxRecords) {
+    db.run(
+      `DELETE FROM requestDetails WHERE id IN (SELECT id FROM requestDetails ORDER BY timestamp ASC LIMIT ?)`,
+      [totalItems - config.maxRecords]
+    );
+    totalItems = config.maxRecords;
+  }
 
   const page = filter.page || 1;
   const pageSize = filter.pageSize || 50;
