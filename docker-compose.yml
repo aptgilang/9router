@@ -12,6 +12,9 @@ services:
       - LOG_PAYLOAD=true
       - REDACT_LOGS=false
       - ENABLE_REQUEST_LOGS=true
+      - OBSERVABILITY_MAX_RECORDS=1000
+      - OBSERVABILITY_MAX_JSON_SIZE=2048
+      - NODE_OPTIONS=--max-old-space-size=1024
 
 volumes:
   9router-data:
