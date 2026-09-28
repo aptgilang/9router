@@ -72,10 +72,52 @@ export function createSSEStream(options = {}) {
   let totalContentLength = 0;
   let accumulatedContent = "";
   let accumulatedThinking = "";
+  let accumulatedProviderRaw = "";
+  const MAX_RAW_STREAM_CAPTURE = 512 * 1024; // 512 KB
   let ttftAt = null;
   let sseLineCount = 0;
   let sseEmittedCount = 0;
   const eventTypeCounts = {};
+
+  const toolCallsMap = new Map();
+
+  function mergeToolCallDelta(toolCalls) {
+    if (!toolCalls) return;
+    const list = Array.isArray(toolCalls) ? toolCalls : [toolCalls];
+    for (const tc of list) {
+      if (!tc) continue;
+      const idx = tc.index ?? toolCallsMap.size;
+      if (!toolCallsMap.has(idx)) {
+        toolCallsMap.set(idx, {
+          index: idx,
+          id: tc.id || `call_${idx}`,
+          type: tc.type || "function",
+          function: {
+            name: tc.function?.name || "",
+            arguments: tc.function?.arguments || ""
+          }
+        });
+      } else {
+        const existing = toolCallsMap.get(idx);
+        if (tc.id) existing.id = tc.id;
+        if (tc.type) existing.type = tc.type;
+        if (tc.function?.name) existing.function.name += tc.function.name;
+        if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
+      }
+    }
+  }
+
+  function getAccumulatedToolCalls() {
+    if (toolCallsMap.size === 0) return [];
+    return Array.from(toolCallsMap.values()).map((tc) => ({
+      id: tc.id,
+      type: tc.type || "function",
+      function: {
+        name: tc.function.name,
+        arguments: tc.function.arguments
+      }
+    }));
+  }
 
   // Track Responses API event framing for same-format passthrough (codex)
   let currentOpenAIResponsesEvent = null;
@@ -107,7 +149,9 @@ export function createSSEStream(options = {}) {
     if (onStreamComplete) {
       onStreamComplete({
         content: accumulatedContent,
-        thinking: accumulatedThinking
+        thinking: accumulatedThinking,
+        tool_calls: getAccumulatedToolCalls(),
+        rawProviderResponse: accumulatedProviderRaw
       }, finalUsage, ttftAt);
     }
   };
@@ -118,6 +162,9 @@ export function createSSEStream(options = {}) {
       const text = decoder.decode(chunk, { stream: true });
       buffer += text;
       reqLogger?.appendProviderChunk?.(text);
+      if (accumulatedProviderRaw.length < MAX_RAW_STREAM_CAPTURE) {
+        accumulatedProviderRaw += text.slice(0, MAX_RAW_STREAM_CAPTURE - accumulatedProviderRaw.length);
+      }
 
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
@@ -198,6 +245,9 @@ export function createSSEStream(options = {}) {
               if (reasoning && typeof reasoning === "string") {
                 totalContentLength += reasoning.length;
                 accumulatedThinking += reasoning;
+              }
+              if (delta?.tool_calls) {
+                mergeToolCallDelta(delta.tool_calls);
               }
 
               const extracted = extractUsage(parsed);
@@ -295,6 +345,22 @@ export function createSSEStream(options = {}) {
           totalContentLength += parsed.delta.thinking.length;
           accumulatedThinking += parsed.delta.thinking;
         }
+        // Claude format - tool_use start
+        if (parsed.content_block?.type === "tool_use") {
+          mergeToolCallDelta({
+            index: parsed.index ?? toolCallsMap.size,
+            id: parsed.content_block.id,
+            type: "function",
+            function: { name: parsed.content_block.name || "", arguments: "" }
+          });
+        }
+        // Claude format - tool_use delta
+        if (parsed.delta?.type === "input_json_delta" && parsed.delta?.partial_json) {
+          mergeToolCallDelta({
+            index: parsed.index ?? Math.max(0, toolCallsMap.size - 1),
+            function: { arguments: parsed.delta.partial_json }
+          });
+        }
         
         // OpenAI format - content
         if (parsed.choices?.[0]?.delta?.content) {
@@ -305,6 +371,10 @@ export function createSSEStream(options = {}) {
         if (parsed.choices?.[0]?.delta?.reasoning_content) {
           totalContentLength += parsed.choices[0].delta.reasoning_content.length;
           accumulatedThinking += parsed.choices[0].delta.reasoning_content;
+        }
+        // OpenAI format - tool calls
+        if (parsed.choices?.[0]?.delta?.tool_calls) {
+          mergeToolCallDelta(parsed.choices[0].delta.tool_calls);
         }
         
         // Gemini format
@@ -318,6 +388,19 @@ export function createSSEStream(options = {}) {
               } else {
                 accumulatedContent += part.text;
               }
+            }
+            if (part.functionCall) {
+              const fn = part.functionCall;
+              const idx = toolCallsMap.size;
+              mergeToolCallDelta({
+                index: idx,
+                id: `call_${idx}_${Date.now()}`,
+                type: "function",
+                function: {
+                  name: fn.name || "",
+                  arguments: typeof fn.args === "object" ? JSON.stringify(fn.args) : (fn.args || "")
+                }
+              });
             }
           }
         }
@@ -354,6 +437,15 @@ export function createSSEStream(options = {}) {
         if (translated?.length > 0) {
           for (const item of translated) {
             if (item === null || item === undefined) continue;
+            if (item?.choices?.[0]?.delta?.tool_calls) {
+              mergeToolCallDelta(item.choices[0].delta.tool_calls);
+            }
+            if (item?.choices?.[0]?.delta?.content && !accumulatedContent) {
+              accumulatedContent += item.choices[0].delta.content;
+            }
+            if (item?.choices?.[0]?.delta?.reasoning_content && !accumulatedThinking) {
+              accumulatedThinking += item.choices[0].delta.reasoning_content;
+            }
             // Filter empty chunks
             if (!hasValuableContent(item, sourceFormat)) {
               continue; // Skip this empty chunk

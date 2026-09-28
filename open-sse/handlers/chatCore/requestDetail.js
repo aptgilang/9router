@@ -2,23 +2,27 @@ import { saveRequestUsage, appendRequestLog, saveRequestDetail } from "@/lib/usa
 import { COLORS } from "../../utils/stream.js";
 import { canonicalizeUsage } from "../../utils/usageTracking.js";
 
-const OPTIONAL_PARAMS = [
-  "temperature", "top_p", "top_k",
-  "max_tokens", "max_completion_tokens",
-  "thinking", "reasoning", "enable_thinking",
-  "presence_penalty", "frequency_penalty",
-  "seed", "stop", "tools", "tool_choice",
-  "response_format", "prediction", "store", "metadata",
-  "n", "logprobs", "top_logprobs", "logit_bias",
-  "user", "parallel_tool_calls"
-];
+export function sanitizeHeaders(headers) {
+  if (!headers || typeof headers !== "object") return undefined;
+  const out = {};
+  const sensitiveKeys = ["authorization", "x-api-key", "api-key", "cookie", "set-cookie", "token", "password", "proxy-authorization"];
+  const entries = typeof headers.entries === "function" ? Array.from(headers.entries()) : Object.entries(headers);
+  for (const [k, v] of entries) {
+    if (sensitiveKeys.some(s => k.toLowerCase().includes(s))) {
+      out[k] = "[REDACTED]";
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
 
 export function extractRequestConfig(body, stream) {
-  const config = { messages: body.messages || [], model: body.model, stream };
-  for (const param of OPTIONAL_PARAMS) {
-    if (body[param] !== undefined) config[param] = body[param];
-  }
-  return config;
+  if (!body || typeof body !== "object") return body;
+  return {
+    ...body,
+    stream: stream !== undefined ? stream : body.stream
+  };
 }
 
 export function extractUsageFromResponse(responseBody) {
@@ -78,6 +82,12 @@ export function buildRequestDetail(base, overrides = {}) {
     response: base.response || {},
     pxpipe: base.pxpipe || undefined,
     status: base.status || "success",
+    metadata: {
+      endpoint: base.endpoint || overrides.endpoint || base.clientRawRequest?.endpoint || undefined,
+      sourceFormat: base.sourceFormat || overrides.sourceFormat || undefined,
+      targetFormat: base.targetFormat || overrides.targetFormat || undefined,
+      providerUrl: base.providerUrl || overrides.providerUrl || undefined
+    },
     ...overrides
   };
 }

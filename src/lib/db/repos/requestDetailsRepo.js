@@ -4,7 +4,7 @@ import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 const DEFAULT_MAX_RECORDS = 200;
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_FLUSH_INTERVAL_MS = 5000;
-const DEFAULT_MAX_JSON_SIZE = 5 * 1024;
+const DEFAULT_MAX_JSON_SIZE = 2 * 1024 * 1024; // 2MB
 const CONFIG_CACHE_TTL_MS = 5000;
 
 let cachedConfig = null;
@@ -23,7 +23,7 @@ async function getObservabilityConfig() {
         maxRecords: settings.observabilityMaxRecords || parseInt(process.env.OBSERVABILITY_MAX_RECORDS || String(DEFAULT_MAX_RECORDS), 10),
         batchSize: settings.observabilityBatchSize || parseInt(process.env.OBSERVABILITY_BATCH_SIZE || String(DEFAULT_BATCH_SIZE), 10),
         flushIntervalMs: settings.observabilityFlushIntervalMs || parseInt(process.env.OBSERVABILITY_FLUSH_INTERVAL_MS || String(DEFAULT_FLUSH_INTERVAL_MS), 10),
-        maxJsonSize: (settings.observabilityMaxJsonSize || parseInt(process.env.OBSERVABILITY_MAX_JSON_SIZE || "5", 10)) * 1024,
+        maxJsonSize: (settings.observabilityMaxJsonSize || parseInt(process.env.OBSERVABILITY_MAX_JSON_SIZE || "2048", 10)) * 1024,
       };
       cachedConfigTs = Date.now();
       return cachedConfig;
@@ -39,7 +39,7 @@ async function getObservabilityConfig() {
       maxRecords: settings.observabilityMaxRecords || parseInt(process.env.OBSERVABILITY_MAX_RECORDS || String(DEFAULT_MAX_RECORDS), 10),
       batchSize: settings.observabilityBatchSize || parseInt(process.env.OBSERVABILITY_BATCH_SIZE || String(DEFAULT_BATCH_SIZE), 10),
       flushIntervalMs: settings.observabilityFlushIntervalMs || parseInt(process.env.OBSERVABILITY_FLUSH_INTERVAL_MS || String(DEFAULT_FLUSH_INTERVAL_MS), 10),
-      maxJsonSize: (settings.observabilityMaxJsonSize || parseInt(process.env.OBSERVABILITY_MAX_JSON_SIZE || "5", 10)) * 1024,
+      maxJsonSize: (settings.observabilityMaxJsonSize || parseInt(process.env.OBSERVABILITY_MAX_JSON_SIZE || "2048", 10)) * 1024,
     };
   } catch {
     cachedConfig = {
@@ -78,11 +78,12 @@ function generateDetailId(model) {
 }
 
 function truncateField(obj, maxSize) {
-  const str = JSON.stringify(obj || {});
+  if (obj === null || obj === undefined) return obj;
+  const str = typeof obj === "string" ? obj : JSON.stringify(obj);
   if (str.length > maxSize) {
-    return { _truncated: true, _originalSize: str.length, _preview: str.substring(0, 200) };
+    return { _truncated: true, _originalSize: str.length, _preview: str.substring(0, 500) };
   }
-  return obj || {};
+  return obj;
 }
 
 async function flushToDatabase() {
@@ -116,6 +117,7 @@ async function flushToDatabase() {
             providerResponse: truncateField(item.providerResponse, config.maxJsonSize),
             response: truncateField(item.response, config.maxJsonSize),
             pxpipe: item.pxpipe || undefined,
+            metadata: item.metadata || undefined,
           };
 
           db.run(
@@ -172,8 +174,17 @@ export async function getRequestDetails(filter = {}) {
   if (filter.endDate) { conds.push("timestamp <= ?"); params.push(new Date(filter.endDate).toISOString()); }
 
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  const config = await getObservabilityConfig();
   const cntRow = db.get(`SELECT COUNT(*) as c FROM requestDetails ${where}`, params);
-  const totalItems = cntRow ? cntRow.c : 0;
+  let totalItems = cntRow ? cntRow.c : 0;
+
+  if (!where && totalItems > config.maxRecords) {
+    db.run(
+      `DELETE FROM requestDetails WHERE id IN (SELECT id FROM requestDetails ORDER BY timestamp ASC LIMIT ?)`,
+      [totalItems - config.maxRecords]
+    );
+    totalItems = config.maxRecords;
+  }
 
   const page = filter.page || 1;
   const pageSize = filter.pageSize || 50;
@@ -184,7 +195,25 @@ export async function getRequestDetails(filter = {}) {
     `SELECT data FROM requestDetails ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
     [...params, pageSize, offset]
   );
-  const details = rows.map((r) => parseJson(r.data, {}));
+  const details = rows.map((r) => {
+    const full = parseJson(r.data, {});
+    if (filter.summary) {
+      return {
+        id: full.id,
+        timestamp: full.timestamp,
+        provider: full.provider,
+        model: full.model,
+        connectionId: full.connectionId,
+        status: full.status,
+        latency: full.latency,
+        tokens: full.tokens,
+        hasThinking: Boolean(full.response?.thinking),
+        hasTools: Boolean(full.response?.tool_calls && full.response.tool_calls.length > 0),
+        pxpipe: full.pxpipe ? { applied: full.pxpipe.applied } : undefined
+      };
+    }
+    return full;
+  });
 
   return {
     details,

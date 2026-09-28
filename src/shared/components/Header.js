@@ -316,14 +316,22 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
           </div>
         )}
         <HeaderSearch />
+        
+        {/* Quick Endpoint Copy Button */}
         <button
-          onClick={() => setDonateOpen(true)}
-          className="flex items-center gap-1.5 px-3 h-8 rounded-lg border border-pink-500/30 bg-pink-500/10 text-pink-600 dark:text-pink-400 hover:bg-pink-500/20 transition-colors text-sm font-medium"
-          aria-label="Donate"
+          onClick={() => {
+            const endpoint = `${window.location.origin}/v1`;
+            navigator.clipboard.writeText(endpoint);
+            alert(`API Endpoint copied: ${endpoint}`);
+          }}
+          className="flex items-center gap-1.5 px-2.5 h-8 rounded-lg border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 transition-colors text-xs font-medium cursor-pointer"
+          title="Click to copy /v1 API Endpoint"
         >
-          <span className="material-symbols-outlined text-[18px]">volunteer_activism</span>
-          <span className="hidden sm:inline">Donate</span>
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="hidden sm:inline font-mono">/v1 API</span>
+          <span className="material-symbols-outlined text-[14px]">content_copy</span>
         </button>
+
         <ThemeToggle />
         <HeaderLanguage />
         <HeaderMenu onLogout={handleLogout} />

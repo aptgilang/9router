@@ -1,13 +1,26 @@
 import { NextResponse } from "next/server";
-import { getRequestDetails } from "@/lib/usageDb";
+import { getRequestDetails, getRequestDetailById } from "@/lib/usageDb";
 
 /**
  * GET /api/usage/request-details
- * Query parameters: page, pageSize (1-100), provider, model, connectionId, status, startDate, endDate
+ * Query parameters: id, page, pageSize (1-100), provider, model, connectionId, status, startDate, endDate, summary
  */
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
+
+    // Support single record query by ID for fast lazy-loading
+    const id = searchParams.get("id");
+    if (id) {
+      const detail = await getRequestDetailById(id);
+      if (!detail) {
+        return NextResponse.json(
+          { error: "Request detail not found" },
+          { status: 404 }
+        );
+      }
+      return NextResponse.json({ detail });
+    }
     
     const pageRaw = parseInt(searchParams.get("page"));
     const page = Number.isNaN(pageRaw) ? 1 : pageRaw;
@@ -19,6 +32,7 @@ export async function GET(request) {
     const status = searchParams.get("status");
     const startDate = searchParams.get("startDate");
     const endDate = searchParams.get("endDate");
+    const summary = searchParams.get("summary") === "true";
     
     if (page < 1) {
       return NextResponse.json(
@@ -36,7 +50,8 @@ export async function GET(request) {
     
     const filter = {
       page,
-      pageSize
+      pageSize,
+      summary
     };
     
     if (provider) filter.provider = provider;
@@ -47,6 +62,14 @@ export async function GET(request) {
     if (endDate) filter.endDate = endDate;
     
     const result = await getRequestDetails(filter);
+
+    // Support disabling redaction via environment variables:
+    // REDACT_LOGS=false or LOG_PAYLOAD=true allows viewing unredacted request/response payloads
+    const shouldRedact = process.env.REDACT_LOGS !== "false" && process.env.LOG_PAYLOAD !== "true";
+
+    if (!shouldRedact) {
+      return NextResponse.json(result);
+    }
 
     // Redact conversation payloads: the stored details include full request
     // bodies (user prompts, tool calls) and provider responses. Returning them
