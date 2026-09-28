@@ -83,6 +83,17 @@ else
     git checkout --ours package.json 2>/dev/null || true
     git add package.json
   fi
+
+  # Auto-remove .github/workflows if introduced from upstream (prevents OAuth scope rejection on git push)
+  if [ -d ".github/workflows" ]; then
+    echo "  -> Removing .github/workflows to prevent OAuth push refusal..."
+    git rm -rf .github/workflows 2>/dev/null || true
+  fi
+fi
+
+# Ensure .github/workflows is not tracked
+if [ -d ".github/workflows" ]; then
+  git rm -rf .github/workflows 2>/dev/null || true
 fi
 
 # 6. Ensure our custom files are strictly intact
