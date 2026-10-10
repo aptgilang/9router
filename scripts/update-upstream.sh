@@ -79,7 +79,14 @@ else
     git add src/app/\(dashboard\)/dashboard/combos/page.js
   fi
 
+  if git status --porcelain | grep -q "Header.js"; then
+    echo "  -> Resolving Header.js (preserving quick endpoint copy button)..."
+    git checkout --ours src/shared/components/Header.js 2>/dev/null || true
+    git add src/shared/components/Header.js
+  fi
+
   if git status --porcelain | grep -q "package.json"; then
+    echo "  -> Resolving package.json..."
     git checkout --ours package.json 2>/dev/null || true
     git add package.json
   fi
